@@ -1,0 +1,161 @@
+{
+  "timestamp": "2026-08-15T19:28:41.401363",
+  "framework": "agentevals",
+  "summary": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0,
+    "pass_rate": 100.0,
+    "avg_latency": 1.421
+  },
+  "results": [
+    {
+      "test_id": "weather_01_simple",
+      "category": "weather",
+      "input": "What is the weather in London?",
+      "passed": true,
+      "latency_seconds": 1.604,
+      "actual_tools": [
+        "get_weather"
+      ],
+      "actual_args": [
+        {
+          "city": "London"
+        }
+      ],
+      "output_text": "It's always sunny in London!",
+      "error": null,
+      "metrics": [
+        {
+          "name": "agentevals_trajectory_match",
+          "passed": true,
+          "score": 1.0,
+          "details": "Trajectory matched reference"
+        },
+        {
+          "name": "argument_extraction",
+          "passed": true,
+          "score": 1.0,
+          "details": "All expected tool arguments matched."
+        },
+        {
+          "name": "output_groundedness",
+          "passed": true,
+          "score": 1.0,
+          "details": "Output contained all expected elements: ['London', 'sunny']"
+        }
+      ]
+    },
+    {
+      "test_id": "weather_02_multi_word_city",
+      "category": "weather",
+      "input": "Can you tell me the current weather forecast for New York?",
+      "passed": true,
+      "latency_seconds": 1.523,
+      "actual_tools": [
+        "get_weather"
+      ],
+      "actual_args": [
+        {
+          "city": "New York"
+        }
+      ],
+      "output_text": "It's always sunny in New York!",
+      "error": null,
+      "metrics": [
+        {
+          "name": "agentevals_trajectory_match",
+          "passed": true,
+          "score": 1.0,
+          "details": "Trajectory matched reference"
+        },
+        {
+          "name": "argument_extraction",
+          "passed": true,
+          "score": 1.0,
+          "details": "All expected tool arguments matched."
+        },
+        {
+          "name": "output_groundedness",
+          "passed": true,
+          "score": 1.0,
+          "details": "Output contained all expected elements: ['New York', 'sunny']"
+        }
+      ]
+    },
+    {
+      "test_id": "weather_03_informal_phrasing",
+      "category": "weather",
+      "input": "How's it looking outside in Tokyo today?",
+      "passed": true,
+      "latency_seconds": 1.206,
+      "actual_tools": [
+        "get_weather"
+      ],
+      "actual_args": [
+        {
+          "city": "Tokyo"
+        }
+      ],
+      "output_text": "It's always sunny in Tokyo!",
+      "error": null,
+      "metrics": [
+        {
+          "name": "agentevals_trajectory_match",
+          "passed": true,
+          "score": 1.0,
+          "details": "Trajectory matched reference"
+        },
+        {
+          "name": "argument_extraction",
+          "passed": true,
+          "score": 1.0,
+          "details": "All expected tool arguments matched."
+        },
+        {
+          "name": "output_groundedness",
+          "passed": true,
+          "score": 1.0,
+          "details": "Output contained all expected elements: ['Tokyo', 'sunny']"
+        }
+      ]
+    },
+    {
+      "test_id": "weather_04_city_with_country",
+      "category": "weather",
+      "input": "Is it raining in Paris, France right now?",
+      "passed": true,
+      "latency_seconds": 1.351,
+      "actual_tools": [
+        "get_weather"
+      ],
+      "actual_args": [
+        {
+          "city": "Paris"
+        }
+      ],
+      "output_text": "It's always sunny in Paris!",
+      "error": null,
+      "metrics": [
+        {
+          "name": "agentevals_trajectory_match",
+          "passed": true,
+          "score": 1.0,
+          "details": "Trajectory matched reference"
+        },
+        {
+          "name": "argument_extraction",
+          "passed": true,
+          "score": 1.0,
+          "details": "All expected tool arguments matched."
+        },
+        {
+          "name": "output_groundedness",
+          "passed": true,
+          "score": 1.0,
+          "details": "Output contained all expected elements: ['Paris', 'sunny']"
+        }
+      ]
+    }
+  ]
+}
