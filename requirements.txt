@@ -4,3 +4,5 @@ python-dotenv
 flask
 agentevals
 chainlit
+requests
+langsmith

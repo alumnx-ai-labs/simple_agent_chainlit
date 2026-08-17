@@ -1,6 +1,9 @@
-# AgentEvals Suite for Simple LangChain Agent
+# Multi-Tier Agent Evaluation Framework
 
-This evaluation suite uses LangChain's official **`agentevals`** library to evaluate execution trajectories, tool call precision, parameter extraction, groundedness, and system safety for the agent in `agent.py`.
+A production-grade evaluation suite for the LangChain agent in `agent.py`, featuring:
+1. **Tier 1: Deterministic Trajectory Matching** (`agentevals`, Argument Precision, Groundedness)
+2. **Tier 2: LLM-as-a-Judge Evaluation** (`agentevals` Trajectory Judge, Faithfulness Grader)
+3. **Tier 3: LangSmith Cloud Integration** (`langsmith.evaluate()`, Dataset Sync, Tracing & Dashboards)
 
 ---
 
@@ -10,27 +13,31 @@ This evaluation suite uses LangChain's official **`agentevals`** library to eval
 evals/
 ├── __init__.py
 ├── dataset.py        # 20 benchmark test cases (4 per category) with reference trajectories
-├── evaluators.py     # Trajectory evaluators using agentevals (create_trajectory_match_evaluator)
-├── run_evals.py      # CLI runner executing agentevals across the benchmark suite
-├── README.md         # Guide and methodology for developers and management
-└── eval_report.md    # Summary report generated after each test run
+├── evaluators.py     # Tier 1 & Tier 2 evaluators (agentevals match, LLM judges, faithfulness)
+├── run_evals.py      # CLI runner for Tier 1 & Tier 2 evals (CLI table, Markdown, JSON)
+├── langsmith_eval.py # Tier 3: LangSmith cloud dataset synchronization and evaluate() runner
+├── README.md         # Guide & methodology for developers and management
+├── eval_report.md    # Formatted Markdown report generated after each test run
+└── eval_results.json # Machine-readable JSON output for CI/CD archiving
 ```
 
 ---
 
-## 🔬 How AgentEvals is Used
+## 🔬 Evaluation Tiers & Graders
 
-Unlike basic output-only evaluations, **`agentevals`** inspects the **execution trajectory** (the entire multi-step message history and tool invocations) using:
+### Tier 1: Deterministic Trajectory & Groundedness Graders (Fast, 0 extra LLM cost)
+- **`agentevals.trajectory.match`**: Verifies tool execution trajectories against golden references using `create_trajectory_match_evaluator`.
+- **`argument_extraction`**: Checks parameter accuracy (e.g. `city: "Tokyo"`).
+- **`output_groundedness`**: Confirms presence of key factual elements from tools.
+- **`negative_controls`**: Enforces that forbidden tools are never called for direct QA, math, or greetings.
 
-1. **`agentevals.trajectory.match.create_trajectory_match_evaluator`**:
-   - Compares the actual message trajectory produced by `agent.py` against golden reference trajectories.
-   - Configured with `trajectory_match_mode="unordered"` to support deterministic and robust tool call validation regardless of multi-tool execution order.
-2. **Negative Control Verification**:
-   - Ensures forbidden tool calls are not executed for direct questions, math calculations, and chit-chat.
-3. **Argument & Parameter Matching**:
-   - Validates that parameters like `city` are accurately extracted from natural language.
-4. **Groundedness Verification**:
-   - Ensures the final response is grounded in the tool output without hallucination.
+### Tier 2: LLM-as-a-Judge Evaluators (Qualitative & Semantic Reasoning)
+- **`agentevals.trajectory.llm` (`TRAJECTORY_ACCURACY_PROMPT`)**: An LLM judge evaluates whether the agent's multi-step trajectory was logical, necessary, and efficient.
+- **`llm_faithfulness`**: Verifies that the agent's final answer strictly relies on tool output without inventing facts or hallucinating.
+
+### Tier 3: LangSmith Cloud Evaluation (`langsmith.evaluate`)
+- **Dataset Sync**: Automatically syncs test cases to a LangSmith cloud dataset (`simple-agent-benchmark`).
+- **Interactive Tracing**: Captures multi-step execution traces, latency, token consumption, and evaluator scores in a live cloud dashboard.
 
 ---
 
@@ -38,7 +45,7 @@ Unlike basic output-only evaluations, **`agentevals`** inspects the **execution 
 
 | Category | Tests | Description | Expected Trajectory |
 | :--- | :---: | :--- | :--- |
-| **`weather`** | 4 | Single-city, multi-word city, informal, city+country | Calls `get_weather` with extracted city |
+| **`weather`** | 4 | Single-city, multi-word city, informal phrasing, city+country | Calls `get_weather` with real Open-Meteo API |
 | **`daily_thought`** | 4 | Direct requests, motivation synonyms, quote requests | Calls `create_daily_thought` |
 | **`negative_control`** | 4 | Greeting, math, factual QA, coding query | **No tools** (Direct response) |
 | **`multi_tool`** | 4 | Weather + inspirational quote compound queries | Calls both `get_weather` & `create_daily_thought` |
@@ -48,36 +55,35 @@ Unlike basic output-only evaluations, **`agentevals`** inspects the **execution 
 
 ## 🚀 How to Run the Evaluations
 
-### 1. Requirements
-Ensure dependencies including `agentevals` are installed:
-```bash
-pip install -r requirements.txt
-```
-
-### 2. Environment Variables
-Make sure your Gemini API key is configured in `.env`:
-```bash
-GOOGLE_API_KEY=your_key_here
-```
-
-### 3. Run AgentEvals Suite
+### 1. Tier 1: Deterministic Evaluation (Fast)
 ```bash
 # Run all 20 test cases
 python evals/run_evals.py
 
-# Run only weather trajectory evals
-python evals/run_evals.py --category weather
-
-# Run only negative control safety checks
-python evals/run_evals.py --category negative_control
-
-# Run with custom delay throttling (seconds between queries)
-python evals/run_evals.py --delay 2.0
+# Run specific categories
+python evals/run_evals.py --category weather negative_control
 ```
+
+### 2. Tier 2: Deterministic + LLM-as-a-Judge Evaluation
+```bash
+# Run with LLM-as-a-Judge enabled
+python evals/run_evals.py --llm-judge
+
+# Run specific category with LLM-as-a-Judge
+python evals/run_evals.py --category weather --llm-judge
+```
+
+### 3. Tier 3: LangSmith Cloud Evaluation
+1. Set `LANGSMITH_API_KEY`, `LANGSMITH_TRACING=true`, and `LANGSMITH_PROJECT` in `.env`.
+2. Run:
+```bash
+python evals/langsmith_eval.py
+```
+3. Open [smith.langchain.com](https://smith.langchain.com) to view the interactive test suite and traces.
 
 ---
 
 ## 📊 Evaluation Reports
 After execution, results are generated in:
-- **`evals/eval_report.md`**: Formatted Markdown summary table with category breakdown.
-- **`evals/eval_results.json`**: Machine-readable JSON artifact for CI/CD pipelines.
+- **`evals/eval_report.md`**: Markdown summary table with per-test details and LLM judge reasoning.
+- **`evals/eval_results.json`**: Full JSON data for automated CI/CD pipelines.

@@ -17,7 +17,6 @@ async def on_chat_start():
             "I can help you with:\n"
             "- **Weather** - Ask me about the weather in any city\n"
             "- **Daily Inspiration** - Request a motivational thought or quote\n"
-            "- **General Questions** - Math, facts, coding, and more\n\n"
             "Go ahead, type something!"
         )
     ).send()

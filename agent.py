@@ -22,8 +22,56 @@ else:
 
 
 def get_weather(city: str) -> str:
-    """Get weather for a given city."""
-    return f"It's always sunny in {city}!"
+    """Get real-time weather for a given city using the Open-Meteo API (free, no key required)."""
+    import requests
+
+    # Step 1: Geocode city name to latitude/longitude
+    geo_url = "https://geocoding-api.open-meteo.com/v1/search"
+    geo_resp = requests.get(geo_url, params={"name": city, "count": 1}, timeout=10)
+    geo_data = geo_resp.json()
+
+    if not geo_data.get("results"):
+        return f"Sorry, I couldn't find a location called '{city}'."
+
+    location = geo_data["results"][0]
+    lat = location["latitude"]
+    lon = location["longitude"]
+    resolved_name = location.get("name", city)
+    country = location.get("country", "")
+
+    # Step 2: Fetch current weather
+    weather_url = "https://api.open-meteo.com/v1/forecast"
+    weather_resp = requests.get(weather_url, params={
+        "latitude": lat,
+        "longitude": lon,
+        "current": "temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code",
+        "temperature_unit": "celsius",
+        "wind_speed_unit": "kmh",
+    }, timeout=10)
+    weather_data = weather_resp.json()
+
+    current = weather_data.get("current", {})
+    temp = current.get("temperature_2m", "N/A")
+    humidity = current.get("relative_humidity_2m", "N/A")
+    wind = current.get("wind_speed_10m", "N/A")
+    code = current.get("weather_code", -1)
+
+    # WMO weather interpretation codes -> human-readable condition
+    wmo_codes = {
+        0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
+        45: "Foggy", 48: "Depositing rime fog",
+        51: "Light drizzle", 53: "Moderate drizzle", 55: "Dense drizzle",
+        61: "Slight rain", 63: "Moderate rain", 65: "Heavy rain",
+        71: "Slight snowfall", 73: "Moderate snowfall", 75: "Heavy snowfall",
+        80: "Slight rain showers", 81: "Moderate rain showers", 82: "Violent rain showers",
+        95: "Thunderstorm", 96: "Thunderstorm with slight hail", 99: "Thunderstorm with heavy hail",
+    }
+    condition = wmo_codes.get(code, "Unknown")
+
+    return (
+        f"Weather in {resolved_name}, {country}: {condition}. "
+        f"Temperature: {temp}°C, Humidity: {humidity}%, Wind: {wind} km/h."
+    )
 
 
 def create_daily_thought() -> str:

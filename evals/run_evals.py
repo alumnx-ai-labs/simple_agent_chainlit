@@ -1,14 +1,16 @@
-"""CLI Evaluation Runner for Simple LangChain Agent with AgentEvals.
+"""CLI Evaluation Runner for Simple LangChain Agent with AgentEvals & LLM-as-a-Judge.
 
 Usage:
-    python evals/run_evals.py
+    python evals/run_evals.py                               # Tier 1 deterministic evals
+    python evals/run_evals.py --llm-judge                   # Tier 1 + Tier 2 LLM-as-a-Judge evals
     python evals/run_evals.py --category weather
-    python evals/run_evals.py --category negative_control
+    python evals/run_evals.py --category negative_control --llm-judge
     python evals/run_evals.py --delay 2.0
 
 Features:
 - Executes benchmark evaluation against live LangChain agent
 - Evaluates trajectories using LangChain's official AgentEvals library
+- Optional LLM-as-a-Judge qualitative grading for trajectory accuracy & faithfulness
 - Handles 429 rate limits gracefully with auto-retry and backoff
 - Windows cp1252 / UTF-8 safe console output
 - Generates terminal summary, JSON results, and Markdown report
@@ -41,7 +43,12 @@ from evals.dataset import EVAL_DATASET, TestCase, get_dataset
 from evals.evaluators import TestCaseResult, run_test_evaluation
 
 
-def run_single_eval(test_case: TestCase, max_retries: int = 3, verbose: bool = False) -> TestCaseResult:
+def run_single_eval(
+    test_case: TestCase,
+    enable_llm_judge: bool = False,
+    max_retries: int = 3,
+    verbose: bool = False
+) -> TestCaseResult:
     """Execute the agent for a single test case with automatic 429 retry backoff."""
     start_time = time.time()
     last_error = None
@@ -60,6 +67,7 @@ def run_single_eval(test_case: TestCase, max_retries: int = 3, verbose: bool = F
                 messages=messages,
                 output_text=output_text,
                 latency=latency,
+                enable_llm_judge=enable_llm_judge
             )
 
         except Exception as e:
@@ -85,7 +93,7 @@ def run_single_eval(test_case: TestCase, max_retries: int = 3, verbose: bool = F
     )
 
 
-def generate_markdown_report(results: List[TestCaseResult], output_path: str):
+def generate_markdown_report(results: List[TestCaseResult], output_path: str, enable_llm_judge: bool = False):
     """Generate a clean Markdown evaluation report."""
     total = len(results)
     passed = sum(1 for r in results if r.passed)
@@ -95,8 +103,9 @@ def generate_markdown_report(results: List[TestCaseResult], output_path: str):
     categories = sorted(list(set(r.category for r in results)))
 
     lines = [
-        "# Agent Evaluation Report (AgentEvals)",
-        f"**Run Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "# Agent Evaluation Report",
+        f"**Run Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  ",
+        f"**Evaluation Mode:** {'Tier 1 (Deterministic) + Tier 2 (LLM-as-a-Judge)' if enable_llm_judge else 'Tier 1 (Deterministic AgentEvals)'}",
         "",
         "## Overall Summary",
         f"- **Total Tests:** {total}",
@@ -120,28 +129,29 @@ def generate_markdown_report(results: List[TestCaseResult], output_path: str):
 
     lines.extend([
         "",
-        "## Detailed Test Results",
-        "| Status | Test ID | Category | Input | Latency | Details |",
+        "## Detailed Metric Results",
+        "| Status | Test ID | Category | Input | Latency | Evaluator Details |",
         "| :---: | :--- | :--- | :--- | :---: | :--- |",
     ])
 
     for r in results:
         status = "PASS" if r.passed else "FAIL"
         input_preview = (r.input_text[:35] + "...") if len(r.input_text) > 35 else r.input_text
-        failed_details = "; ".join([m.details for m in r.metric_scores if not m.passed]) if not r.passed else "Passed"
+        metric_details = "; ".join([f"**{m.name}**: {m.details}" for m in r.metric_scores]) if r.metric_scores else "No metrics"
         if r.error:
-            failed_details = f"Error: {r.error[:80]}..."
-        lines.append(f"| {status} | `{r.test_id}` | `{r.category}` | {input_preview} | {r.latency_seconds}s | {failed_details} |")
+            metric_details = f"Error: {r.error[:80]}..."
+        lines.append(f"| {status} | `{r.test_id}` | `{r.category}` | {input_preview} | {r.latency_seconds}s | {metric_details} |")
 
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
 
-def generate_json_results(results: List[TestCaseResult], output_path: str):
+def generate_json_results(results: List[TestCaseResult], output_path: str, enable_llm_judge: bool = False):
     """Serialize results to JSON for CI/CD archiving."""
     data = {
         "timestamp": datetime.now().isoformat(),
         "framework": "agentevals",
+        "llm_judge_enabled": enable_llm_judge,
         "summary": {
             "total": len(results),
             "passed": sum(1 for r in results if r.passed),
@@ -170,8 +180,9 @@ def generate_json_results(results: List[TestCaseResult], output_path: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run Evaluation Suite for Simple LangChain Agent with AgentEvals")
+    parser = argparse.ArgumentParser(description="Run Evaluation Suite for Simple LangChain Agent with AgentEvals & LLM Judge")
     parser.add_argument("--category", "-c", nargs="+", help="Filter test categories to run (e.g. weather, negative_control)")
+    parser.add_argument("--llm-judge", action="store_true", default=False, help="Enable Tier 2 LLM-as-a-Judge evaluators")
     parser.add_argument("--delay", "-d", type=float, default=1.0, help="Delay in seconds between test cases")
     parser.add_argument("--verbose", "-v", action="store_true", default=True, help="Print detailed per-test output")
     parser.add_argument("--report", "-r", action="store_true", default=True, help="Generate eval_report.md and eval_results.json")
@@ -179,7 +190,9 @@ def main():
 
     dataset = get_dataset(args.category)
     print("=" * 70)
-    print(f">> Running Simple Agent Evaluation Suite with AgentEvals ({len(dataset)} test cases)")
+    mode_str = "Tier 1 (Deterministic) + Tier 2 (LLM-as-a-Judge)" if args.llm_judge else "Tier 1 (Deterministic AgentEvals)"
+    print(f">> Running Simple Agent Evaluation Suite ({len(dataset)} test cases)")
+    print(f"   Mode: {mode_str}")
     if args.category:
         print(f"   Filtering Categories: {', '.join(args.category)}")
     print("=" * 70)
@@ -187,7 +200,7 @@ def main():
     results: List[TestCaseResult] = []
     for i, tc in enumerate(dataset, 1):
         print(f"Running [{i:02d}/{len(dataset):02d}]: {tc.id} ...", end="", flush=True)
-        res = run_single_eval(tc, verbose=False)
+        res = run_single_eval(tc, enable_llm_judge=args.llm_judge, verbose=False)
         status = "PASSED" if res.passed else "FAILED"
         print(f" [{status}] ({res.latency_seconds}s)")
         if args.verbose and not res.passed:
@@ -211,7 +224,7 @@ def main():
     avg_latency = sum(r.latency_seconds for r in results) / total if total > 0 else 0
 
     print("\n" + "=" * 70)
-    print("EVALUATION RESULTS SUMMARY (AgentEvals)")
+    print("EVALUATION RESULTS SUMMARY")
     print("=" * 70)
     print(f"Total Test Cases:    {total}")
     print(f"Passed:              {passed}")
@@ -235,8 +248,8 @@ def main():
     if args.report:
         md_path = os.path.join(CURRENT_DIR, "eval_report.md")
         json_path = os.path.join(CURRENT_DIR, "eval_results.json")
-        generate_markdown_report(results, md_path)
-        generate_json_results(results, json_path)
+        generate_markdown_report(results, md_path, enable_llm_judge=args.llm_judge)
+        generate_json_results(results, json_path, enable_llm_judge=args.llm_judge)
         print("Reports generated:")
         print(f"   - Markdown: {md_path}")
         print(f"   - JSON:     {json_path}")

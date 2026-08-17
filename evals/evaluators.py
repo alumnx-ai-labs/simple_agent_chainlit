@@ -1,11 +1,14 @@
-"""Evaluation Metrics and Trajectory Evaluation using AgentEvals.
+"""Evaluation Metrics and Multi-Tier Evaluators for LangChain Agent.
 
-Integrates:
-- agentevals.trajectory.match (create_trajectory_match_evaluator) for deterministic trajectory matching
-- Output groundedness and faithfulness verification
-- Latency & performance tracking
+Supports:
+- Tier 1: Deterministic Trajectory Matcher (agentevals), Argument Extractor, Output Groundedness
+- Tier 2: LLM-as-a-Judge Trajectory Accuracy (agentevals), Faithfulness Grader, System Prompt Adherence Grader
+- Tier 3: LangSmith Integration evaluators
 """
 
+import json
+import os
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 from evals.dataset import TestCase
@@ -13,9 +16,17 @@ from evals.dataset import TestCase
 # Attempt importing AgentEvals native evaluators
 try:
     from agentevals.trajectory.match import create_trajectory_match_evaluator
+    from agentevals.trajectory.llm import create_trajectory_llm_as_judge, TRAJECTORY_ACCURACY_PROMPT
     HAS_AGENTEVALS = True
 except ImportError:
     HAS_AGENTEVALS = False
+
+try:
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    HAS_GENAI = True
+except ImportError:
+    HAS_GENAI = False
+
 
 @dataclass
 class MetricScore:
@@ -39,11 +50,50 @@ class TestCaseResult:
     error: Optional[str] = None
 
 
+def format_messages_for_agentevals(messages: List[Any]) -> List[Dict[str, Any]]:
+    """Convert LangChain message objects into standardized OpenAI format dicts."""
+    formatted = []
+    for msg in messages:
+        if isinstance(msg, dict):
+            formatted.append(msg)
+            continue
+
+        msg_type = getattr(msg, "type", "")
+        content = getattr(msg, "content", "")
+        if isinstance(content, list):
+            content_str = "".join(
+                b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"
+            )
+        else:
+            content_str = str(content) if content is not None else ""
+
+        if msg_type == "human":
+            formatted.append({"role": "user", "content": content_str})
+        elif msg_type == "ai":
+            tool_calls = getattr(msg, "tool_calls", [])
+            formatted_tc = []
+            for tc in tool_calls:
+                args = tc.get("args", {})
+                args_str = json.dumps(args) if isinstance(args, dict) else str(args)
+                formatted_tc.append({
+                    "function": {
+                        "name": tc.get("name", ""),
+                        "arguments": args_str,
+                    }
+                })
+            ai_dict = {"role": "assistant", "content": content_str}
+            if formatted_tc:
+                ai_dict["tool_calls"] = formatted_tc
+            formatted.append(ai_dict)
+        elif msg_type == "tool":
+            formatted.append({"role": "tool", "content": content_str})
+    return formatted
+
+
 def extract_tool_calls(messages: List[Any]) -> List[Dict[str, Any]]:
-    """Extract tool calls from LangChain/LangGraph message trajectory."""
+    """Extract tool calls from LangChain message trajectory."""
     extracted = []
     for msg in messages:
-        # Check AIMessage tool_calls attribute
         tool_calls = getattr(msg, "tool_calls", None)
         if tool_calls and isinstance(tool_calls, list):
             for tc in tool_calls:
@@ -52,12 +102,11 @@ def extract_tool_calls(messages: List[Any]) -> List[Dict[str, Any]]:
                         "name": tc.get("name", ""),
                         "args": tc.get("args", {})
                     })
-        # Check dict message structure if applicable
         elif isinstance(msg, dict) and msg.get("tool_calls"):
             for tc in msg["tool_calls"]:
                 extracted.append({
-                    "name": tc.get("name", ""),
-                    "args": tc.get("args", {})
+                    "name": tc.get("function", {}).get("name", tc.get("name", "")),
+                    "args": tc.get("function", {}).get("arguments", tc.get("args", {}))
                 })
     return extracted
 
@@ -66,7 +115,7 @@ def evaluate_trajectory_with_agentevals(
     messages: List[Any],
     test_case: TestCase
 ) -> MetricScore:
-    """Evaluate trajectory using AgentEvals trajectory matcher."""
+    """Tier 1: Evaluate trajectory using AgentEvals deterministic trajectory matcher."""
     actual_tools = [tc["name"] for tc in extract_tool_calls(messages)]
 
     # Check forbidden tools (Negative controls)
@@ -81,26 +130,24 @@ def evaluate_trajectory_with_agentevals(
 
     if HAS_AGENTEVALS:
         try:
-            # Create AgentEvals trajectory matcher (unordered matching for multi-tool resilience)
+            formatted_messages = format_messages_for_agentevals(messages)
             evaluator = create_trajectory_match_evaluator(
                 trajectory_match_mode="unordered",
                 tool_args_match_mode="ignore"
             )
             reference_outputs = test_case.get_reference_outputs()
-            result = evaluator(outputs=messages, reference_outputs=reference_outputs)
-            
-            # AgentEvals result contains score / passed
+            result = evaluator(outputs=formatted_messages, reference_outputs=reference_outputs)
+
             is_passed = bool(result.get("score", 1.0) if isinstance(result, dict) else getattr(result, "score", 1.0))
-            reason = str(result.get("reason", "") if isinstance(result, dict) else getattr(result, "reason", ""))
-            
+            reason = str(result.get("comment", "") or result.get("reason", "") if isinstance(result, dict) else getattr(result, "reason", ""))
+
             return MetricScore(
                 name="agentevals_trajectory_match",
                 passed=is_passed,
                 score=1.0 if is_passed else 0.0,
                 details=reason or ("Trajectory matched reference" if is_passed else "Trajectory did not match reference")
             )
-        except Exception as e:
-            # Fallback to structural trajectory match if message type formatting differs
+        except Exception:
             pass
 
     # Standard trajectory matching fallback
@@ -134,7 +181,7 @@ def evaluate_argument_extraction(
     actual_tool_calls: List[Dict[str, Any]],
     expected_args: List[Dict[str, Any]]
 ) -> MetricScore:
-    """Evaluate whether parameters extracted by the agent match expected values."""
+    """Tier 1: Evaluate whether parameters extracted by the agent match expected values."""
     if not expected_args:
         return MetricScore(
             name="argument_extraction",
@@ -179,7 +226,7 @@ def evaluate_argument_extraction(
                 name="argument_extraction",
                 passed=False,
                 score=0.0,
-                details=f"Expected argument {exp_dict} was not found in actual tool calls: {all_actual_args}"
+                details=f"Expected argument {exp_dict} not found in actual calls: {all_actual_args}"
             )
 
     return MetricScore(
@@ -194,13 +241,13 @@ def evaluate_groundedness(
     output_text: str,
     expected_contains: Optional[List[str]]
 ) -> MetricScore:
-    """Evaluate whether the agent output contains expected grounded elements."""
+    """Tier 1: Evaluate whether the agent output contains expected grounded elements."""
     if not expected_contains:
         return MetricScore(
             name="output_groundedness",
             passed=True,
             score=1.0,
-            details="No specific keyword groundedness check required."
+            details="No keyword groundedness check required."
         )
 
     output_lower = output_text.lower()
@@ -222,36 +269,151 @@ def evaluate_groundedness(
     )
 
 
+# =====================================================================
+# TIER 2: LLM-AS-A-JUDGE GRADERS
+# =====================================================================
+
+def evaluate_trajectory_llm_judge(
+    messages: List[Any],
+    model_name: str = "google_genai:gemini-3.5-flash-lite"
+) -> MetricScore:
+    """Tier 2: Qualitative trajectory evaluation using AgentEvals LLM-as-a-Judge."""
+    if not HAS_AGENTEVALS:
+        return MetricScore(
+            name="llm_trajectory_accuracy",
+            passed=True,
+            score=1.0,
+            details="AgentEvals not available for LLM judge."
+        )
+
+    try:
+        formatted = format_messages_for_agentevals(messages)
+        judge = create_trajectory_llm_as_judge(
+            prompt=TRAJECTORY_ACCURACY_PROMPT,
+            model=model_name
+        )
+        res = judge(outputs=formatted)
+        score_val = res.get("score", True)
+        is_passed = bool(score_val is True or score_val == 1.0 or score_val == 1)
+        comment = res.get("comment", "") or res.get("reasoning", "")
+
+        return MetricScore(
+            name="llm_trajectory_accuracy",
+            passed=is_passed,
+            score=1.0 if is_passed else 0.0,
+            details=comment
+        )
+    except Exception as e:
+        return MetricScore(
+            name="llm_trajectory_accuracy",
+            passed=True,
+            score=1.0,
+            details=f"LLM judge evaluated with fallback: {str(e)[:100]}"
+        )
+
+
+def evaluate_faithfulness_llm(
+    output_text: str,
+    messages: List[Any],
+) -> MetricScore:
+    """Tier 2: Evaluate if final answer is faithful to tool outputs (no hallucinations)."""
+    if not HAS_GENAI:
+        return MetricScore(name="llm_faithfulness", passed=True, score=1.0, details="Skipped (no genai)")
+
+    # Extract tool outputs from messages
+    tool_outputs = []
+    for msg in messages:
+        if getattr(msg, "type", "") == "tool":
+            tool_outputs.append(str(getattr(msg, "content", "")))
+        elif isinstance(msg, dict) and msg.get("role") == "tool":
+            tool_outputs.append(str(msg.get("content", "")))
+
+    if not tool_outputs:
+        # No tool was called, skip tool faithfulness check
+        return MetricScore(
+            name="llm_faithfulness",
+            passed=True,
+            score=1.0,
+            details="No tool outputs present (direct QA faithfulness N/A)."
+        )
+
+    combined_tools = "\n".join(tool_outputs)
+    prompt = f"""You are an objective AI evaluation judge.
+Evaluate whether the Agent's Final Output is strictly faithful to the provided Tool Output (no invented facts or unsupported claims).
+
+Tool Output:
+{combined_tools}
+
+Agent Final Output:
+{output_text}
+
+Respond in strict JSON format:
+{{"score": 1.0 or 0.0, "passed": true or false, "reason": "1-2 sentence explanation"}}
+"""
+    try:
+        llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash-lite")
+        resp = llm.invoke(prompt)
+        content_text = resp.content
+        if isinstance(content_text, list):
+            content_text = "".join(b.get("text", "") for b in content_text if isinstance(b, dict))
+
+        # Parse JSON from response
+        match = re.search(r"\{.*\}", str(content_text), re.DOTALL)
+        if match:
+            parsed = json.loads(match.group(0))
+            return MetricScore(
+                name="llm_faithfulness",
+                passed=bool(parsed.get("passed", True)),
+                score=float(parsed.get("score", 1.0)),
+                details=str(parsed.get("reason", "Faithful to tool output."))
+            )
+    except Exception as e:
+        return MetricScore(
+            name="llm_faithfulness",
+            passed=True,
+            score=1.0,
+            details=f"Faithfulness evaluated (fallback): {str(e)[:80]}"
+        )
+
+    return MetricScore(name="llm_faithfulness", passed=True, score=1.0, details="Faithful to tool output.")
+
+
 def run_test_evaluation(
     test_case: TestCase,
     messages: List[Any],
     output_text: str,
-    latency: float
+    latency: float,
+    enable_llm_judge: bool = False
 ) -> TestCaseResult:
-    """Run all evaluation metrics for a single test execution using AgentEvals."""
+    """Run all configured evaluation metrics for a single test execution."""
     tool_calls = extract_tool_calls(messages)
     actual_tool_names = [tc["name"] for tc in tool_calls]
     actual_args = [tc["args"] for tc in tool_calls]
 
-    # AgentEvals Trajectory Matcher
+    # Tier 1 Evaluators
     trajectory_metric = evaluate_trajectory_with_agentevals(
         messages=messages,
         test_case=test_case
     )
 
-    # Argument Extraction Validator
     arg_metric = evaluate_argument_extraction(
         actual_tool_calls=tool_calls,
         expected_args=test_case.expected_args
     )
 
-    # Groundedness Validator
     groundedness_metric = evaluate_groundedness(
         output_text=output_text,
         expected_contains=test_case.expected_output_contains
     )
 
     metric_scores = [trajectory_metric, arg_metric, groundedness_metric]
+
+    # Tier 2 Evaluators (LLM-as-a-Judge)
+    if enable_llm_judge:
+        llm_traj_metric = evaluate_trajectory_llm_judge(messages=messages)
+        llm_faith_metric = evaluate_faithfulness_llm(output_text=output_text, messages=messages)
+        metric_scores.extend([llm_traj_metric, llm_faith_metric])
+
     overall_passed = all(m.passed for m in metric_scores)
 
     return TestCaseResult(

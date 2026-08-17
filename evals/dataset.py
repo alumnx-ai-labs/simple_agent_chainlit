@@ -26,7 +26,9 @@ class TestCase:
     description: str = ""
 
     def get_reference_outputs(self) -> List[Dict[str, Any]]:
-        """Generate reference trajectory message objects for agentevals."""
+        """Generate reference trajectory in official OpenAI-style message format for agentevals."""
+        import json
+
         if not self.expected_tools:
             # For negative controls / direct QA: expected output is an assistant message with NO tool calls
             return [{"role": "assistant", "content": self.description or "Direct response"}]
@@ -35,13 +37,13 @@ class TestCase:
         for i, tool_name in enumerate(self.expected_tools):
             args = self.expected_args[i] if i < len(self.expected_args) else {}
             tool_calls.append({
-                "name": tool_name,
-                "args": args,
-                "id": f"call_{i+1}",
-                "type": "tool_call",
+                "function": {
+                    "name": tool_name,
+                    "arguments": json.dumps(args),
+                }
             })
 
-        return [{"role": "assistant", "tool_calls": tool_calls}]
+        return [{"role": "assistant", "content": "", "tool_calls": tool_calls}]
 
 
 EVAL_DATASET: List[TestCase] = [
@@ -54,7 +56,7 @@ EVAL_DATASET: List[TestCase] = [
         input="What is the weather in London?",
         expected_tools=["get_weather"],
         expected_args=[{"city": "London"}],
-        expected_output_contains=["London", "sunny"],
+        expected_output_contains=["London", "Temperature"],
         description="Basic single-word city weather lookup",
     ),
     TestCase(
@@ -63,7 +65,7 @@ EVAL_DATASET: List[TestCase] = [
         input="Can you tell me the current weather forecast for New York?",
         expected_tools=["get_weather"],
         expected_args=[{"city": "New York"}],
-        expected_output_contains=["New York", "sunny"],
+        expected_output_contains=["New York", "Temperature"],
         description="Multi-word city name extraction",
     ),
     TestCase(
@@ -72,7 +74,7 @@ EVAL_DATASET: List[TestCase] = [
         input="How's it looking outside in Tokyo today?",
         expected_tools=["get_weather"],
         expected_args=[{"city": "Tokyo"}],
-        expected_output_contains=["Tokyo", "sunny"],
+        expected_output_contains=["Tokyo", "Temperature"],
         description="Informal natural language phrasing for weather",
     ),
     TestCase(
@@ -81,7 +83,7 @@ EVAL_DATASET: List[TestCase] = [
         input="Is it raining in Paris, France right now?",
         expected_tools=["get_weather"],
         expected_args=[{"city": "Paris, France"}],
-        expected_output_contains=["Paris", "sunny"],
+        expected_output_contains=["Paris", "Temperature"],
         description="City specified with country name",
     ),
 
@@ -168,7 +170,7 @@ EVAL_DATASET: List[TestCase] = [
         input="What is the weather in Seattle, and can you also give me an inspirational thought?",
         expected_tools=["get_weather", "create_daily_thought"],
         expected_args=[{"city": "Seattle"}, {}],
-        expected_output_contains=["Seattle", "sunny"],
+        expected_output_contains=["Seattle", "Temperature"],
         description="Compound query: weather followed by thought",
     ),
     TestCase(
@@ -177,7 +179,7 @@ EVAL_DATASET: List[TestCase] = [
         input="Start with an inspiring daily thought and then tell me the weather in Berlin.",
         expected_tools=["create_daily_thought", "get_weather"],
         expected_args=[{}, {"city": "Berlin"}],
-        expected_output_contains=["Berlin", "sunny"],
+        expected_output_contains=["Berlin", "Temperature"],
         description="Compound query: thought followed by weather",
     ),
     TestCase(
@@ -186,7 +188,7 @@ EVAL_DATASET: List[TestCase] = [
         input="Give me a morning briefing: what's the weather in Miami and give me a motivational quote.",
         expected_tools=["get_weather", "create_daily_thought"],
         expected_args=[{"city": "Miami"}, {}],
-        expected_output_contains=["Miami", "sunny"],
+        expected_output_contains=["Miami", "Temperature"],
         description="Morning briefing style requiring both tools",
     ),
     TestCase(
@@ -195,7 +197,7 @@ EVAL_DATASET: List[TestCase] = [
         input="I'd like an uplifting thought for today alongside the weather forecast for Chicago.",
         expected_tools=["create_daily_thought", "get_weather"],
         expected_args=[{}, {"city": "Chicago"}],
-        expected_output_contains=["Chicago", "sunny"],
+        expected_output_contains=["Chicago", "Temperature"],
         description="Combined quote and weather forecast request",
     ),
 
@@ -208,7 +210,7 @@ EVAL_DATASET: List[TestCase] = [
         input="What's the weather in San Fransisco right now?",
         expected_tools=["get_weather"],
         expected_args=[{"city": "San Fran"}],
-        expected_output_contains=["sunny"],
+        expected_output_contains=["Temperature"],
         description="Slight city typo handled gracefully by tool router",
     ),
     TestCase(
