@@ -73,26 +73,45 @@ python agent.py "Give me an inspirational thought for today"
 python agent.py "Tell me the weather in Mumbai and share a daily thought"
 ```
 
-### Optional: Web UI
+### Chat Interfaces
 
-`app.py` is a small Flask wrapper around the same agent, so you can chat with it in a browser instead of the terminal.
+#### 1. Chainlit UI (Recommended)
+
+Run the modern interactive chat UI powered by Chainlit:
+
+```bash
+chainlit run chat.py
+```
+
+Then open [http://localhost:8000](http://localhost:8000) in your browser.
+
+#### 2. Flask Web UI (Alternative)
+
+A lightweight Flask web interface:
 
 ```bash
 python app.py
 ```
 
-Then open [http://127.0.0.1:5000](http://127.0.0.1:5000) and chat with the agent from the page.
+Then open [http://127.0.0.1:5000](http://127.0.0.1:5000) in your browser.
 
 ## Project Structure
 
 ```
 simple_agent/
-├── agent.py               # Core agent + tools (run this for CLI queries)
+├── agent.py               # Core agent + tools (Open-Meteo weather & daily thoughts)
+├── chat.py                # Chainlit interactive chat UI
 ├── app.py                 # Optional Flask web UI for the agent
 ├── templates/
 │   └── index.html         # UI page served by app.py
+├── evals/                 # Multi-tier evaluation framework (AgentEvals & LangSmith)
+│   ├── dataset.py         # 20 benchmark test cases across 5 categories
+│   ├── evaluators.py      # Tier 1 & Tier 2 evaluators (deterministic + LLM judges)
+│   ├── run_evals.py       # CLI evaluation runner
+│   ├── langsmith_eval.py  # Tier 3 LangSmith cloud evaluator
+│   └── README.md          # Full evaluation guide & methodology
 ├── requirements.txt       # Python dependencies
-├── README.md              # This file
+├── README.md              # Project documentation
 ├── .env.example           # Example environment variables
 └── .gitignore             # Git ignore rules
 ```
